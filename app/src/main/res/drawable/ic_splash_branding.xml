@@ -1,0 +1,54 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="200dp"
+    android:height="50dp"
+    android:viewportWidth="400"
+    android:viewportHeight="100">
+
+    <!-- MAX STREAM typography vector -->
+    <!-- M -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 30,30 L 42,30 L 54,58 L 66,30 L 78,30 L 78,72 L 67,72 L 67,44 L 57,66 L 51,66 L 41,44 L 41,72 L 30,72 Z" />
+
+    <!-- A -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 96,30 L 110,30 L 124,72 L 113,72 L 109,61 L 98,61 L 94,72 L 83,72 Z M 102,40 L 98,52 L 107,52 Z" />
+
+    <!-- X -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 134,30 L 146,30 L 155,47 L 164,30 L 176,30 L 162,51 L 177,72 L 165,72 L 155,55 L 145,72 L 133,72 L 148,51 Z" />
+
+    <!-- S -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 218,39 C 215,33 209,30 202,30 C 194,30 189,34 189,40 C 189,46 194,49 205,53 C 219,57 225,62 225,71 C 225,81 215,86 201,86 C 190,86 183,81 180,73 L 190,69 C 192,74 196,76 202,76 C 208,76 213,73 213,68 C 213,62 208,59 197,55 C 184,52 177,47 177,38 C 177,29 186,23 200,23 C 210,23 218,27 221,33 Z" />
+
+    <!-- T -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 233,30 L 261,30 L 261,39 L 252,39 L 252,72 L 242,72 L 242,39 L 233,39 Z" />
+
+    <!-- R -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 271,30 L 290,30 C 300,30 306,35 306,44 C 306,50 301,55 295,56 L 308,72 L 294,72 L 284,58 L 281,58 L 281,72 L 271,72 Z M 281,39 L 281,50 L 288,50 C 293,50 296,48 296,44 C 296,40 293,39 288,39 Z" />
+
+    <!-- E -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 317,30 L 345,30 L 345,39 L 327,39 L 327,47 L 342,47 L 342,56 L 327,56 L 327,64 L 345,64 L 345,72 L 317,72 Z" />
+
+    <!-- A -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 361,30 L 375,30 L 389,72 L 378,72 L 374,61 L 363,61 L 359,72 L 348,72 Z M 367,40 L 363,52 L 372,52 Z" />
+
+    <!-- M -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 400,30 L 412,30 L 424,58 L 436,30 L 448,30 L 448,72 L 437,72 L 437,44 L 427,66 L 421,66 L 411,44 L 411,72 L 400,72 Z" />
+
+</vector>

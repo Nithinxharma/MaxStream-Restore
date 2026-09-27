@@ -1,0 +1,191 @@
+package xyz.mpv.rex.preferences
+
+import androidx.annotation.StringRes
+import xyz.mpv.rex.R
+import xyz.mpv.rex.preferences.preference.PreferenceStore
+import xyz.mpv.rex.preferences.preference.getEnum
+
+/**
+ * Preferences for the video browser (folder and video lists)
+ */
+class BrowserPreferences(
+  preferenceStore: PreferenceStore,
+  context: android.content.Context,
+) {
+  // Folder sorting preferences
+  val folderSortType = preferenceStore.getEnum("folder_sort_type", FolderSortType.Title)
+  val folderSortOrder = preferenceStore.getEnum("folder_sort_order", SortOrder.Ascending)
+
+  // Video sorting preferences
+  val videoSortType = preferenceStore.getEnum("video_sort_type", VideoSortType.Title)
+  val videoSortOrder = preferenceStore.getEnum("video_sort_order", SortOrder.Ascending)
+
+  // Network sorting preferences
+  val networkSortType = preferenceStore.getEnum("network_sort_type", FolderSortType.Title)
+  val networkSortOrder = preferenceStore.getEnum("network_sort_order", SortOrder.Ascending)
+
+  val folderViewMode = preferenceStore.getEnum("folder_view_mode", FolderViewMode.AlbumView)
+
+  private val isTablet = context.resources.configuration.smallestScreenWidthDp >= 600
+  val folderGridColumnsPortrait = preferenceStore.getInt("folder_grid_columns_portrait", if (isTablet) 4 else 3)
+  val folderGridColumnsLandscape = preferenceStore.getInt("folder_grid_columns_landscape", 5)
+
+  val videoGridColumnsPortrait = preferenceStore.getInt("video_grid_columns_portrait", if (isTablet) 4 else 2)
+  val videoGridColumnsLandscape = preferenceStore.getInt("video_grid_columns_landscape", 4)
+
+  // Visibility preferences for video card chips
+  val showVideoThumbnails = preferenceStore.getBoolean("show_video_thumbnails", true)
+  val showSizeChip = preferenceStore.getBoolean("show_size_chip", true)
+  // Metadata-dependent chips (disabled by default for better performance)
+  val showResolutionChip = preferenceStore.getBoolean("show_resolution_chip", false)
+  val showFramerateInResolution = preferenceStore.getBoolean("show_framerate_in_resolution", false)
+  val showSubtitleIndicator = preferenceStore.getBoolean("show_subtitle_indicator", false)
+  val showProgressBar = preferenceStore.getBoolean("show_progress_bar", true)
+  val mediaLayoutMode = preferenceStore.getEnum("media_layout_mode", MediaLayoutMode.LIST)
+
+  // Visibility preferences for folder card chips
+  val showTotalVideosChip = preferenceStore.getBoolean("show_total_videos_chip", true)
+  // Metadata-dependent chips (disabled by default for better performance)
+  val showTotalDurationChip = preferenceStore.getBoolean("show_total_duration_chip", false)
+  val showTotalSizeChip = preferenceStore.getBoolean("show_total_size_chip", true)
+  val showDateChip = preferenceStore.getBoolean("show_date_chip", false)
+  val showFolderPath = preferenceStore.getBoolean("show_folder_path", true)
+
+  // Auto-scroll to last played media preference (like MX Player)
+  val autoScrollToLastPlayed = preferenceStore.getBoolean("auto_scroll_to_last_played", false)
+
+  // Watched threshold preference (percentage 1-100)
+  val watchedThreshold = preferenceStore.getInt("watched_threshold", 95)
+
+  // Media visibility preferences
+  val showAudioFiles = preferenceStore.getBoolean("show_audio_files", false)
+  val includeNoMediaContent = preferenceStore.getBoolean("include_no_media_content", false)
+  val showTreeViewPath = preferenceStore.getBoolean("show_tree_view_path", false)
+
+  // RexShorts preferences
+  val enableShorts = preferenceStore.getBoolean("enable_shorts", false)
+  val autoSwipeShorts = preferenceStore.getBoolean("shorts_auto_swipe", false)
+  val enableGlassShortsControls = preferenceStore.getBoolean("enable_glass_shorts_controls", false)
+  val showShortsBackButton = preferenceStore.getBoolean("show_shorts_back_button", true)
+  val includeShortHorizontalVideos = preferenceStore.getBoolean("shorts_include_horizontal", false)
+  val maxHorizontalVideoDurationMinutes = preferenceStore.getInt("shorts_max_horizontal_minutes", 1)
+  val shortsSourceFolders = preferenceStore.getStringSet("shorts_source_folders", emptySet())
+  val lastWatchedShortPath = preferenceStore.getString("shorts_last_watched_path", "")
+
+  // Bottom navigation visibility preferences
+  val enableTabRecents = preferenceStore.getBoolean("enable_tab_recents", true)
+  val enableTabPlaylists = preferenceStore.getBoolean("enable_tab_playlists", true)
+  val enableTabNetwork = preferenceStore.getBoolean("enable_tab_network", true)
+  val enableTabCineHub = preferenceStore.getBoolean("enable_tab_cinehub", true)
+  val enableTabCineTv = preferenceStore.getBoolean("enable_tab_cinetv", true)
+  val playedNetworkLinks = preferenceStore.getString("played_network_links", "")
+  // CineHub Library Sources
+  val enableLocalMovies = preferenceStore.getBoolean("enable_local_movies", true)
+  val enableLocalTvShows = preferenceStore.getBoolean("enable_local_tv_shows", true)
+  val enableMetadataScraping = preferenceStore.getBoolean("enable_metadata_scraping", true)
+  val enableArtworkDownloads = preferenceStore.getBoolean("enable_artwork_downloads", true)
+  val enableAutoRefresh = preferenceStore.getBoolean("enable_auto_refresh", true)
+
+  // CineHub Metadata
+  val preferredMetadataSource = preferenceStore.getString("preferred_metadata_source", "TMDB")
+  val preferredArtworkLanguage = preferenceStore.getString("preferred_artwork_language", "en")
+  
+  // CineHub Playback
+  val showMetadataOverlay = preferenceStore.getBoolean("show_metadata_overlay", true)
+  val showCastInformation = preferenceStore.getBoolean("show_cast_information", true)
+  
+  // CineHub Online
+  val enableOnlineDiscovery = preferenceStore.getBoolean("enable_online_discovery", true)
+  val trendingContent = preferenceStore.getBoolean("trending_content", true)
+  
+  val enableCineHubIntegration = preferenceStore.getBoolean("enable_cinehub_integration", true)
+
+  // CineHub Scraper Management & Custom Media Folders
+  val customMoviesFolder = preferenceStore.getString("custom_movies_folder", "")
+  val customTvShowsFolder = preferenceStore.getString("custom_tv_shows_folder", "")
+  val scraperProvider = preferenceStore.getString("scraper_provider", "Auto")
+  val customTmdbApiKey = preferenceStore.getString("custom_tmdb_api_key", "")
+  val enableMovieScraper = preferenceStore.getBoolean("enable_movie_scraper", true)
+  val enableTvScraper = preferenceStore.getBoolean("enable_tv_scraper", true)
+  val cacheScannedMetadata = preferenceStore.getBoolean("cache_scanned_metadata", true)
+}
+
+/**
+ * Sort order options
+ */
+enum class SortOrder(
+  @StringRes val stringRes: Int,
+) {
+  Ascending(R.string.sort_order_ascending),
+  Descending(R.string.sort_order_descending),
+  ;
+
+  val isAscending: Boolean
+    get() = this == Ascending
+}
+
+/**
+ * Folder sorting options
+ */
+enum class FolderSortType(
+  @StringRes val stringRes: Int,
+) {
+  Title(R.string.sort_type_title),
+  Duration(R.string.sort_type_duration),
+  Date(R.string.sort_type_date),
+  Size(R.string.sort_type_size),
+  VideoCount(R.string.sort_type_count),
+  ;
+
+  val displayName: String
+    get() =
+      when (this) {
+        Title -> "Title"
+        Duration -> "Duration"
+        Date -> "Date"
+        Size -> "Size"
+        VideoCount -> "Count"
+      }
+}
+
+/**
+ * Video sorting options
+ */
+enum class VideoSortType(
+  @StringRes val stringRes: Int,
+) {
+  Title(R.string.sort_type_title),
+  Duration(R.string.sort_type_duration),
+  Date(R.string.sort_type_date),
+  Size(R.string.sort_type_size),
+  ;
+
+  val displayName: String
+    get() =
+      when (this) {
+        Title -> "Title"
+        Duration -> "Duration"
+        Date -> "Date"
+        Size -> "Size"
+      }
+}
+
+/**
+ * Folder view mode options
+ */
+enum class FolderViewMode(
+  @StringRes val stringRes: Int,
+) {
+  AlbumView(R.string.view_mode_folder),
+  FileManager(R.string.view_mode_tree),
+  MediaLibrary(R.string.view_mode_library),
+  ;
+}
+
+enum class MediaLayoutMode(
+  @StringRes val stringRes: Int,
+) {
+  LIST(R.string.layout_mode_list),
+  GRID(R.string.layout_mode_grid),
+  ;
+}

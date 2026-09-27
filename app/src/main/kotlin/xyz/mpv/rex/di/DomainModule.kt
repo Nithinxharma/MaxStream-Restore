@@ -1,0 +1,47 @@
+package xyz.mpv.rex.di
+
+import xyz.mpv.rex.domain.anime4k.Anime4KManager
+import xyz.mpv.rex.domain.hdr.HdrToysManager
+import xyz.mpv.rex.repository.wyzie.WyzieSearchRepository
+import xyz.mpv.rex.ui.player.managers.PlaybackManager
+import xyz.mpv.rex.ui.player.HeadlessPlaybackController
+import okhttp3.OkHttpClient
+import org.koin.dsl.module
+import org.koin.android.ext.koin.androidContext
+import java.util.concurrent.TimeUnit
+
+import xyz.mpv.rex.ui.browser.miniplayer.MiniPlayerStateManager
+
+val domainModule = module {
+    single {
+        OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+    single { Anime4KManager(androidContext()) }
+    single { HdrToysManager(androidContext()) }
+    single { WyzieSearchRepository(androidContext(), get(), get(), get()) }
+    single { PlaybackManager(get()) }
+    single { MiniPlayerStateManager() }
+    single { HeadlessPlaybackController(androidContext()) }
+    single { xyz.mpv.rex.jellyfin.api.JellyfinApi(get(), get(), get()) }
+    single { xyz.mpv.rex.jellyfin.remote.JellyfinRemoteClient(get(), get(), get(), androidContext()) }
+    single { xyz.mpv.rex.domain.ytdl.YtDlClient(androidContext(), get()) }
+    single { xyz.mpv.rex.cinehub.extension.registry.ProviderRegistry() }
+    single { xyz.mpv.rex.cinehub.extension.manager.RepositoryManager(get(), get()) }
+    single { xyz.mpv.rex.cinehub.extension.manager.ExtensionManager(androidContext(), get(), get(), get(), get()) }
+    single { xyz.mpv.rex.ui.preferences.ForcePluginActivationViewModel(androidContext(), get(), get(), get(), get()) }
+    single { xyz.mpv.rex.ui.preferences.PluginExecutionTraceViewModel(androidContext(), get(), get(), get()) }
+    single { xyz.mpv.rex.ui.preferences.RepositoryPresetsViewModel(androidContext(), get()) }
+    single<xyz.mpv.rex.auth.AuthManager> { xyz.mpv.rex.auth.FirebaseAuthManager() }
+    single<xyz.mpv.rex.auth.elevation.AdminAuthorizationProvider> { xyz.mpv.rex.auth.elevation.DefaultAdminAuthorizationProvider(get()) }
+    single<xyz.mpv.rex.auth.elevation.ElevationTokenValidator> { xyz.mpv.rex.auth.elevation.DefaultElevationTokenValidator() }
+    single<xyz.mpv.rex.auth.elevation.AdminSessionManager> { xyz.mpv.rex.auth.elevation.DefaultAdminSessionManager(get(), get(), get()) }
+    single { xyz.mpv.rex.cinehub.provider.server.ServerProviderSyncService(androidContext(), get(), get(), get()) }
+    single { xyz.mpv.rex.cinehub.provider.server.FirebaseProviderSyncService(androidContext(), get(), get(), get(), get(), get()) }
+    single { xyz.mpv.rex.cinehub.provider.server.FirebaseAutoDiscoveryService(androidContext(), get(), get()) }
+}
+
+

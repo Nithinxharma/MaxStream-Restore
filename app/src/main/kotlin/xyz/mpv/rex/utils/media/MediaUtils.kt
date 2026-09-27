@@ -1,0 +1,651 @@
+package xyz.mpv.rex.utils.media
+
+import android.app.ActivityOptions
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
+import androidx.core.net.toUri
+import xyz.mpv.rex.BuildConfig
+import xyz.mpv.rex.domain.media.model.Video
+import xyz.mpv.rex.ui.player.PlayerActivity
+import xyz.mpv.rex.ui.player.HeadlessPlaybackController
+import xyz.mpv.rex.preferences.PlayerPreferences
+import xyz.mpv.rex.utils.history.RecentlyPlayedOps
+import xyz.mpv.rex.database.repository.VideoMetadataCacheRepository
+import xyz.mpv.rex.domain.playbackstate.repository.PlaybackStateRepository
+import `is`.xyz.mpv.Utils
+import java.io.File
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
+import com.lagradost.cloudstream3.utils.ExtractorLink
+
+/**
+ * Central entry point for video playback operations.
+ *
+ * ## Architecture
+ *
+ * **MediaUtils.playFile()** - High-level API (this class)
+ * - Called by UI components (Video List, FAB buttons, dialogs)
+ * - Creates Intent and launches PlayerActivity
+ * - Handles Video objects, URI strings, and file paths
+ *
+ * **BaseMPVView.playFile()** - Low-level MPV control (library)
+ * - Called internally by PlayerActivity.onCreate()
+ * - **Do not call directly from UI code**
+ *
+ * ## Flow
+ * ```
+ * UI → MediaUtils.playFile() → Intent → PlayerActivity → BaseMPVView.playFile() → MPV
+ * ```
+ *
+ * ## Special Cases
+ * External apps use ACTION_SEND/ACTION_VIEW intents directly to PlayerActivity,
+ * bypassing MediaUtils.
+ */
+object MediaUtils : KoinComponent {
+  private val metadataCache: VideoMetadataCacheRepository by inject()
+  private val playbackStateRepository: PlaybackStateRepository by inject()
+  private val playerPreferences: PlayerPreferences by inject()
+  private val headlessPlaybackController: HeadlessPlaybackController by inject()
+
+  /**
+   * Play video content from any source.
+   *
+   * Supports:
+   * - Video objects (from media library)
+   * - URI strings (http://, content://, file://)
+   * - File paths (absolute or relative)
+   *
+   * @param source Video object, URI string, android.net.Uri, or file path
+   * @param launchSource Analytics identifier (e.g., "open_file", "recently_played")
+   */
+  fun playFile(
+    source: Any,
+    context: Context,
+    launchSource: String? = null,
+    headers: Map<String, String>? = null,
+    subtitlesJson: String? = null,
+    episodeMetadataJson: String? = null,
+    title: String? = null,
+    posterUrl: String? = null,
+    overview: String? = null,
+    year: String? = null,
+    rating: Double? = null,
+    providerName: String? = null,
+    allLinks: List<ExtractorLink>? = null,
+    preferredOrientation: Int? = null,
+  ) {
+    val intent = when (source) {
+      is Video -> {
+        val videoUri = if (source.uri.scheme == null) {
+          if (source.path.startsWith("/") || source.path.startsWith("file://")) {
+            val path = if (source.path.startsWith("file://")) source.path.removePrefix("file://") else source.path
+            Uri.fromFile(File(path))
+          } else {
+            source.uri
+          }
+        } else {
+          source.uri
+        }
+        val it = Intent(Intent.ACTION_VIEW, videoUri)
+        it.putExtra("width", source.width)
+        it.putExtra("height", source.height)
+        it.putExtra("rotation", source.rotation)
+        source.savedOrientation?.let { orientation -> it.putExtra("saved_orientation", orientation) }
+        it
+      }
+
+      is String -> {
+        if (source.isBlank()) return
+        val uri = if (source.startsWith("/") || source.startsWith("file://")) {
+          val filePath = if (source.startsWith("file://")) source.removePrefix("file://") else source
+          Uri.fromFile(File(filePath))
+        } else {
+          val parsedUri = source.toUri()
+          parsedUri.scheme?.let { parsedUri } ?: Uri.parse("file://$source")
+        }
+        
+        val it = Intent(Intent.ACTION_VIEW, uri)
+        
+        // Eagerly lookup metadata for local files to avoid jumpy transitions
+        if (uri.scheme == "file") {
+          val file = File(uri.path ?: "")
+          if (file.exists()) {
+            val fileName = file.name
+            // Use runBlocking as this is called from UI thread but we need the metadata
+            // Better would be to make playFile suspend, but that requires UI changes everywhere
+            kotlinx.coroutines.runBlocking {
+              // 1. Check for saved orientation in DB
+              val state = playbackStateRepository.getVideoDataByTitle(fileName)
+              if (state?.savedOrientation != null) {
+                it.putExtra("saved_orientation", state.savedOrientation)
+              }
+              
+              // 2. Check metadata cache for dimensions and rotation
+              val metadata = metadataCache.getOrExtractMetadata(file, uri, fileName)
+              if (metadata != null) {
+                it.putExtra("width", metadata.width)
+                it.putExtra("height", metadata.height)
+                it.putExtra("rotation", metadata.rotation)
+              }
+            }
+          }
+        }
+        it
+      }
+
+      is Uri -> {
+        val it = Intent(Intent.ACTION_VIEW, source)
+        if (source.scheme == "file") {
+          val file = File(source.path ?: "")
+          if (file.exists() && !xyz.mpv.rex.utils.storage.FileTypeUtils.isAudioFile(file)) {
+            val fileName = file.name
+            kotlinx.coroutines.runBlocking {
+              val state = playbackStateRepository.getVideoDataByTitle(fileName)
+              if (state?.savedOrientation != null) {
+                it.putExtra("saved_orientation", state.savedOrientation)
+              }
+              val metadata = metadataCache.getOrExtractMetadata(file, source, fileName)
+              if (metadata != null) {
+                it.putExtra("width", metadata.width)
+                it.putExtra("height", metadata.height)
+                it.putExtra("rotation", metadata.rotation)
+              }
+            }
+          }
+        }
+        it
+      }
+
+      else -> {
+        android.util.Log.e("MediaUtils", "Unsupported source type: ${source::class.java}")
+        return
+      }
+    }
+
+    intent.setClass(context, PlayerActivity::class.java)
+    intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    intent.putExtra("internal_launch", true) // Enables subtitle autoload
+    launchSource?.let { intent.putExtra("launch_source", it) }
+    subtitlesJson?.let { intent.putExtra("cloudstream_subtitles_json", it) }
+    episodeMetadataJson?.let { intent.putExtra("cloudstream_episode_metadata_json", it) }
+
+    // Pack HTTP headers for MPV PlayerActivity
+    if (!headers.isNullOrEmpty()) {
+      val headerPairs = mutableListOf<String>()
+      val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+      if (!ua.isNullOrBlank()) {
+        headerPairs.add("User-Agent")
+        headerPairs.add(ua)
+      }
+      headers.forEach { (k, v) ->
+        if (!k.equals("User-Agent", ignoreCase = true) && k.isNotBlank() && v.isNotBlank()) {
+          headerPairs.add(k)
+          headerPairs.add(v)
+        }
+      }
+      intent.putExtra("headers", headerPairs.toTypedArray())
+    }
+
+    if (!title.isNullOrBlank()) {
+      intent.putExtra("title", title)
+      intent.putExtra("cinetv_title", title)
+      intent.putExtra("filename", title)
+    }
+    if (!posterUrl.isNullOrBlank()) {
+      intent.putExtra("cinetv_poster", posterUrl)
+    }
+    if (!overview.isNullOrBlank()) {
+      intent.putExtra("cinetv_overview", overview)
+    }
+    if (!year.isNullOrBlank()) {
+      intent.putExtra("cinetv_year", year)
+    }
+    if (rating != null && rating > 0) {
+      intent.putExtra("cinetv_rating", rating.toString())
+    }
+    if (!providerName.isNullOrBlank()) {
+      intent.putExtra("cinetv_provider", providerName)
+    }
+    if (launchSource != null) {
+      intent.putExtra("cinetv_source_type", launchSource)
+    }
+
+    if (!allLinks.isNullOrEmpty()) {
+      val sortedLinks = allLinks.sortedByDescending { it.quality }
+      intent.putExtra("cinetv_links_urls", sortedLinks.map { it.url }.toTypedArray())
+      intent.putExtra("cinetv_links_names", sortedLinks.map { l ->
+        xyz.mpv.rex.cinehub.utils.StreamLinkFormatter.formatQualityLanguage(l, providerName ?: "")
+      }.toTypedArray())
+      intent.putExtra("cinetv_links_qualities", sortedLinks.map { it.quality }.toIntArray())
+      intent.putExtra("cinetv_links_referers", sortedLinks.map { it.referer }.toTypedArray())
+    }
+    
+    // Set orientation preference (Landscape for TV episodes, Portrait for movies)
+    val finalOrientation = when {
+      preferredOrientation != null -> preferredOrientation
+      !episodeMetadataJson.isNullOrBlank() || launchSource == "cinehub_episode" || launchSource == "tv_series" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+      launchSource == "cinehub_movie" || (!title.isNullOrBlank() && !overview.isNullOrBlank() && episodeMetadataJson.isNullOrBlank()) -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+      else -> null
+    }
+    if (finalOrientation != null) {
+      intent.putExtra("preferred_orientation", finalOrientation)
+    }
+
+    // For playlist items, pass the title so it shows correctly in the player
+    if (source is Video && launchSource != null && (launchSource.contains("playlist") || launchSource == "m3u_playlist" || launchSource == "media_library_list")) {
+      intent.putExtra("title", source.displayName)
+    }
+
+    val isAudio = when (source) {
+      is Video -> source.isAudio
+      is String -> {
+        val path = if (source.startsWith("file://")) source.removePrefix("file://") else source
+        xyz.mpv.rex.utils.storage.FileTypeUtils.isAudioFile(File(path))
+      }
+      is Uri -> {
+        val path = source.path ?: ""
+        xyz.mpv.rex.utils.storage.FileTypeUtils.isAudioFile(File(path))
+      }
+      else -> false
+    }
+
+    // Direct mini player mode: start headless playback in the bottom bar for audio files
+    if (playerPreferences.playInMiniPlayerDirectly.get() && isAudio) {
+      intent.data?.let { uri ->
+        val title = intent.getStringExtra("title") ?: deriveTitle(uri, source)
+        val path = if (uri.scheme == "file") uri.path else (source as? Video)?.path
+        var uris = listOf(uri)
+        var startIndex = 0
+
+        if (path != null && playerPreferences.playlistMode.get()) {
+          val playlistResult = kotlinx.coroutines.runBlocking {
+            if (launchSource == "media_library_list") {
+              FolderPlaylistOps.generateMediaLibraryPlaylist(context, path)
+            } else {
+              FolderPlaylistOps.generateFolderPlaylist(context, path, launchSource)
+            }
+          }
+          if (playlistResult != null) {
+            uris = playlistResult.first
+            startIndex = playlistResult.second
+          }
+        }
+
+        startHeadless(uris, startIndex, title, launchSource = launchSource)
+        return
+      }
+    }
+
+    context.startActivity(
+      intent,
+      ActivityOptions.makeCustomAnimation(context, android.R.anim.fade_in, 0).toBundle()
+    )
+  }
+
+  /**
+   * Play multiple videos as a playlist.
+   *
+   * @param videos List of Video objects
+   * @param startIndex Index of the video to start with
+   * @param context Android context
+   * @param launchSource Analytics identifier
+   * @param playlistId Optional database playlist ID
+   */
+  fun playPlaylist(
+    videos: List<Video>,
+    startIndex: Int,
+    context: Context,
+    launchSource: String? = "playlist",
+    playlistId: Int? = null,
+  ) {
+    if (videos.isEmpty() || startIndex < 0 || startIndex >= videos.size) return
+
+    val firstVideo = videos[startIndex]
+    val videoUri = if (firstVideo.uri.scheme == null) {
+      if (firstVideo.path.startsWith("/") || firstVideo.path.startsWith("file://")) {
+        val path = if (firstVideo.path.startsWith("file://")) firstVideo.path.removePrefix("file://") else firstVideo.path
+        Uri.fromFile(File(path))
+      } else {
+        firstVideo.uri
+      }
+    } else {
+      firstVideo.uri
+    }
+
+    val intent = Intent(Intent.ACTION_VIEW, videoUri)
+    intent.setClass(context, PlayerActivity::class.java)
+    intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    intent.putExtra("internal_launch", true)
+    
+    // Pass metadata extras for the FIRST video to ensure smooth transition
+    intent.putExtra("width", firstVideo.width)
+    intent.putExtra("height", firstVideo.height)
+    intent.putExtra("rotation", firstVideo.rotation)
+    firstVideo.savedOrientation?.let { intent.putExtra("saved_orientation", it) }
+    
+    // Pass playlist data
+    intent.putParcelableArrayListExtra("playlist", ArrayList(videos.map { it.uri }))
+    intent.putExtra("playlist_index", startIndex)
+    launchSource?.let { intent.putExtra("launch_source", it) }
+    playlistId?.let { intent.putExtra("playlist_id", it) }
+    
+    // Pass title for the first video
+    intent.putExtra("title", firstVideo.displayName)
+
+    // Direct mini player mode: start headless playback with the full playlist for audio files.
+    if (playerPreferences.playInMiniPlayerDirectly.get() && firstVideo.isAudio) {
+      val uris = videos.map { video ->
+        if (video.uri.scheme == null &&
+          (video.path.startsWith("/") || video.path.startsWith("file://"))
+        ) {
+          val path = if (video.path.startsWith("file://")) video.path.removePrefix("file://") else video.path
+          Uri.fromFile(File(path))
+        } else {
+          video.uri
+        }
+      }
+      startHeadless(uris, startIndex, firstVideo.displayName, launchSource = launchSource, playlistId = playlistId)
+      return
+    }
+
+    context.startActivity(
+      intent,
+      ActivityOptions.makeCustomAnimation(context, android.R.anim.fade_in, 0).toBundle()
+    )
+  }
+
+  /**
+   * Explicitly plays the supplied files in the bottom mini player, regardless of media type or
+   * the automatic direct-mini-player preference. The list order is preserved as the playlist.
+   */
+  fun playInMiniPlayer(
+    videos: List<Video>,
+    startIndex: Int = 0,
+    launchSource: String? = "mini_player_action",
+    playlistId: Int? = null,
+  ) {
+    if (videos.isEmpty() || startIndex !in videos.indices) return
+
+    val uris = videos.map { video ->
+      if (video.uri.scheme == null &&
+        (video.path.startsWith("/") || video.path.startsWith("file://"))
+      ) {
+        val path = video.path.removePrefix("file://")
+        Uri.fromFile(File(path))
+      } else {
+        video.uri
+      }
+    }
+    startHeadless(uris, startIndex, videos[startIndex].displayName, launchSource = launchSource, playlistId = playlistId)
+  }
+
+  /**
+   * Starts headless playback in the mini player, resolving the resume position (if any)
+   * for the item at [startIndex] from the saved playback state.
+   */
+  private fun startHeadless(
+    uris: List<Uri>,
+    startIndex: Int,
+    title: String,
+    launchSource: String? = null,
+    playlistId: Int? = null,
+  ) {
+    val resumeSec = kotlinx.coroutines.runBlocking {
+      runCatching {
+        playbackStateRepository.getVideoDataByTitle(title)?.lastPosition ?: 0
+      }.getOrDefault(0)
+    }
+    headlessPlaybackController.startHeadless(
+      uris = uris,
+      startIndex = startIndex,
+      title = title,
+      artist = "",
+      resumePositionSec = resumeSec,
+      launchSource = launchSource ?: "direct_mini_player",
+      playlistId = playlistId,
+    )
+  }
+
+  private fun deriveTitle(uri: Uri, source: Any): String = when (source) {
+    is Video -> source.displayName
+    else -> if (uri.scheme == "file") {
+      File(uri.path ?: "").name.ifBlank { uri.lastPathSegment ?: "Unknown Video" }
+    } else {
+      uri.lastPathSegment ?: "Unknown Video"
+    }
+  }
+
+  /**
+   * @deprecated Use RecentlyPlayedOps.getLastPlayed() directly
+   */
+  @Deprecated(
+    message = "Use RecentlyPlayedOps.getLastPlayed() directly",
+    replaceWith =
+      ReplaceWith(
+        "RecentlyPlayedOps.getLastPlayed()",
+        "xyz.mpv.rex.utils.history.RecentlyPlayedOps",
+      ),
+  )
+  suspend fun getRecentlyPlayedFile(): String? = RecentlyPlayedOps.getLastPlayed()
+
+  /**
+   * @deprecated Use RecentlyPlayedOps.hasRecentlyPlayed() directly
+   */
+  @Deprecated(
+    message = "Use RecentlyPlayedOps.hasRecentlyPlayed() directly",
+    replaceWith =
+      ReplaceWith(
+        "RecentlyPlayedOps.hasRecentlyPlayed()",
+        "xyz.mpv.rex.utils.history.RecentlyPlayedOps",
+      ),
+  )
+  suspend fun hasRecentlyPlayedFile(): Boolean = RecentlyPlayedOps.hasRecentlyPlayed()
+
+  /**
+   * Validate URL structure and protocol support.
+   * Checks only URL format and MPV protocol support (http, https, rtsp, rtmp, etc.).
+   * Network errors are detected when MPV attempts to open the stream.
+   */
+  fun isURLValid(url: String): Boolean =
+    url.toUri().let { uri ->
+      val structureOk =
+        uri.isHierarchical && !uri.isRelative && (!uri.host.isNullOrBlank() || !uri.path.isNullOrBlank())
+      structureOk && Utils.PROTOCOLS.contains(uri.scheme)
+    }
+
+  /**
+   * Share videos via system share sheet.
+   *
+   * Uses ACTION_SEND for single video, ACTION_SEND_MULTIPLE for multiple videos.
+   */
+  fun shareVideos(
+    context: Context,
+    videos: List<Video>,
+  ) {
+    if (videos.isEmpty()) {
+      android.util.Log.w("MediaUtils", "Cannot share: video list is empty")
+      return
+    }
+
+    fun toSharableUri(v: Video): android.net.Uri? =
+      v.uri.takeIf { it.scheme.equals("content", true) } ?: run {
+        try {
+          FileProvider.getUriForFile(context, BuildConfig.APPLICATION_ID + ".provider", File(v.path))
+        } catch (e: IllegalArgumentException) {
+          android.util.Log.e("MediaUtils", "FileProvider failed for ${v.path}: ${e.message}")
+          null
+        } catch (e: Exception) {
+          android.util.Log.e("MediaUtils", "Failed to generate URI for ${v.path}", e)
+          null
+        }
+      }
+
+    val uris = videos.mapNotNull { toSharableUri(it) }
+
+    if (uris.isEmpty()) {
+      android.util.Log.w("MediaUtils", "Cannot share: no valid URIs generated for any videos")
+      return
+    }
+
+    if (uris.size < videos.size) {
+      android.util.Log.w("MediaUtils", "Only ${uris.size}/${videos.size} videos could be shared")
+    }
+
+    val intent =
+      if (uris.size == 1) {
+        Intent(Intent.ACTION_SEND).apply {
+          type = "video/*"
+          putExtra(Intent.EXTRA_STREAM, uris.first())
+          putExtra(Intent.EXTRA_SUBJECT, videos.first().displayName)
+          putExtra(Intent.EXTRA_TITLE, videos.first().displayName)
+          clipData = android.content.ClipData.newRawUri(videos.first().displayName, uris.first())
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+      } else {
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+          type = "video/*"
+          putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+          putExtra(Intent.EXTRA_SUBJECT, "Sharing ${uris.size} videos")
+          val clip = android.content.ClipData.newRawUri(videos.first().displayName, uris.first())
+          uris.drop(1).forEach { u -> clip.addItem(android.content.ClipData.Item(u)) }
+          clipData = clip
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+      }
+
+    context.startActivity(
+      Intent.createChooser(
+        intent,
+        if (uris.size == 1) "Share video" else "Share ${uris.size} videos",
+      ),
+    )
+  }
+
+  /**
+   * Plays a network stream with seamless auto-failover and injected headers.
+   *
+   * @param primaryCandidate The verified initial stream to play
+   * @param backupCandidates Backup stream candidates from the provider to fail over to upon errors or timeout
+   * @param context Android context
+   * @param title Display title for the media
+   * @param launchSource Analytics/tracking source string
+   * @param posterUrl Optional thumbnail/poster URL
+   * @param sourceType Optional source type identifier (e.g. "cinehub", "cinetv")
+   */
+  fun playStreamWithFailover(
+    primaryCandidate: xyz.mpv.rex.cinehub.failover.StreamCandidate,
+    backupCandidates: List<xyz.mpv.rex.cinehub.failover.StreamCandidate> = emptyList(),
+    context: Context,
+    title: String? = null,
+    launchSource: String? = null,
+    posterUrl: String? = null,
+    sourceType: String? = null,
+  ) {
+    val uri = runCatching { Uri.parse(primaryCandidate.url) }.getOrNull() ?: Uri.parse("file://${primaryCandidate.url}")
+    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+      setClass(context, PlayerActivity::class.java)
+      addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      putExtra("internal_launch", true)
+      launchSource?.let { putExtra("launch_source", it) }
+      title?.let {
+        putExtra("title", it)
+        putExtra("filename", it)
+      }
+      posterUrl?.let { putExtra("cinetv_poster", it) }
+      sourceType?.let { putExtra("cinetv_source_type", it) }
+
+      // Primary stream headers as flat key-value array
+      val flatHeaders = primaryCandidate.headers.flatMap { listOf(it.key, it.value) }.toTypedArray()
+      if (flatHeaders.isNotEmpty()) {
+        putExtra("headers", flatHeaders)
+      }
+
+      // Backup candidates
+      if (backupCandidates.isNotEmpty()) {
+        putStringArrayListExtra("backup_stream_urls", ArrayList(backupCandidates.map { it.url }))
+        putStringArrayListExtra("backup_stream_names", ArrayList(backupCandidates.map { it.name }))
+        putStringArrayListExtra("backup_stream_qualities", ArrayList(backupCandidates.map { it.quality }))
+        val headersJson = kotlinx.serialization.json.Json.encodeToString<List<Map<String, String>>>(
+          backupCandidates.map { it.headers }
+        )
+        putExtra("backup_stream_headers_json", headersJson)
+      }
+    }
+    context.startActivity(intent)
+  }
+
+  /**
+   * Intelligently extracts a clean media title from stream URLs, raw paths, or dirty media title strings.
+   * Eliminates raw filenames, URL paths, extensions (.m3u8, .mp4, .mkv), and URL query artifacts.
+   */
+  fun extractCleanMediaTitle(mediaTitle: String?, currentFilePath: String): String {
+    val t = mediaTitle ?: ""
+    // 1. If mediaTitle is a valid non-URL title
+    if (t.isNotBlank() && !t.startsWith("http://") && !t.startsWith("https://") && !t.endsWith(".m3u8") && !t.contains(".m3u8") && t != "index.m3u8" && t != "master.m3u8") {
+      val candidate = t.replace(Regex("(?i)^Max\\s*Stream\\s*[-:]?\\s*"), "")
+      val parsed = MediaInfoParser.parse(candidate)
+      return parsed.title.ifBlank { candidate }
+    }
+
+    // 2. If it's a raw URL (from mediaTitle or currentFilePath or share link)
+    val urlCandidate = when {
+      t.startsWith("http://") || t.startsWith("https://") -> t
+      currentFilePath.startsWith("http://") || currentFilePath.startsWith("https://") -> currentFilePath
+      else -> null
+    }
+    if (urlCandidate != null) {
+      val extractedFromUrl = runCatching {
+        val uri = Uri.parse(urlCandidate)
+        val queryTitle = uri.getQueryParameter("title")
+          ?: uri.getQueryParameter("name")
+          ?: uri.getQueryParameter("file")
+          ?: uri.getQueryParameter("q")
+        if (!queryTitle.isNullOrBlank() && !queryTitle.endsWith(".m3u8")) {
+          java.net.URLDecoder.decode(queryTitle, "UTF-8")
+        } else {
+          val segments = uri.pathSegments.reversed()
+          var foundSegment: String? = null
+          for (seg in segments) {
+            val decoded = java.net.URLDecoder.decode(seg, "UTF-8")
+            if (decoded.isNotBlank() &&
+              !decoded.equals("index.m3u8", true) &&
+              !decoded.equals("master.m3u8", true) &&
+              !decoded.equals("stream", true) &&
+              !decoded.equals("play", true) &&
+              !decoded.equals("video", true)
+            ) {
+              foundSegment = decoded
+              break
+            }
+          }
+          foundSegment
+        }
+      }.getOrNull()
+
+      if (!extractedFromUrl.isNullOrBlank()) {
+        val rawName = File(extractedFromUrl).nameWithoutExtension
+        if (rawName.isNotBlank() && !rawName.equals("index", true) && !rawName.equals("master", true)) {
+          val parsed = MediaInfoParser.parse(rawName)
+          return parsed.title.ifBlank { rawName }
+        }
+      }
+    }
+
+    // 3. Local file path
+    if (currentFilePath.isNotBlank() && !currentFilePath.startsWith("http")) {
+      val raw = runCatching { File(currentFilePath).nameWithoutExtension }.getOrDefault("")
+      if (raw.isNotBlank()) {
+        val parsed = MediaInfoParser.parse(raw)
+        return parsed.title.ifBlank { raw }
+      }
+    }
+
+    return ""
+  }
+
+}
